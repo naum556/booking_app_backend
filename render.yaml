@@ -1,0 +1,37 @@
+# Render blueprint for the booking API (NestJS + PostgreSQL).
+#
+# Deploy via: Render Dashboard -> "New" -> "Blueprint" -> connect this repo.
+# Render reads this file and creates the web service automatically.
+#
+# Required environment variable you must set in the Render dashboard
+# (or in the "Environment" block below after first deploy):
+#   DATABASE_URL  - PostgreSQL connection string (e.g. Neon). Sync: false so
+#                   the secret is entered in the dashboard, not stored in git.
+services:
+  - type: web
+    name: booking-api
+    runtime: node
+    # Keep in sync with package.json "engines.node" and .nvmrc.
+    plan: free
+    buildCommand: npm ci && npm run build
+    # start:prod runs `node dist/main`, which listens on process.env.PORT.
+    # Render injects PORT; main.ts already respects it.
+    startCommand: npm run start:prod
+    healthCheckPath: /
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      # Node version is pinned for reproducible builds.
+      - key: NODE_VERSION
+        value: "24.22.0"
+      # Optional: let the browser call this API cross-origin (comma-separated
+      # origins). Leave unset to keep CORS disabled (same-origin proxy setups).
+      - key: CORS_ORIGIN
+        sync: false
+      # TypeORM connection hardening (defaults are fine for most cases).
+      - key: DB_RETRY_ATTEMPTS
+        value: "10"
+      - key: DB_RETRY_DELAY_MS
+        value: "3000"
+      - key: DB_CONNECT_TIMEOUT_MS
+        value: "15000"
