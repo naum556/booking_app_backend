@@ -5,9 +5,15 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { QueryFailedError, Repository } from 'typeorm';
+import { AiService } from '../ai/ai.service.js';
 import { TimeSlot } from '../time-slots/entities/time-slot.entity.js';
 import { CreateBookingDto } from './dto/create-booking.dto.js';
 import { Booking } from './entities/booking.entity.js';
+
+/** A freshly created booking plus its AI-generated confirmation message. */
+export interface BookingWithMessage extends Booking {
+  message: string;
+}
 
 @Injectable()
 export class BookingsService {
@@ -16,9 +22,12 @@ export class BookingsService {
     private readonly bookingRepository: Repository<Booking>,
     @InjectRepository(TimeSlot)
     private readonly timeSlotRepository: Repository<TimeSlot>,
+    private readonly aiService: AiService,
   ) {}
 
-  async create(createBookingDto: CreateBookingDto): Promise<Booking> {
+  async create(
+    createBookingDto: CreateBookingDto,
+  ): Promise<BookingWithMessage> {
     const timeSlot = await this.timeSlotRepository.findOne({
       where: { id: createBookingDto.timeSlotId },
       relations: { booking: true },
@@ -40,8 +49,10 @@ export class BookingsService {
       timeSlotId: createBookingDto.timeSlotId,
     });
 
+    let savedBooking: Booking;
+
     try {
-      return await this.bookingRepository.save(booking);
+      savedBooking = await this.bookingRepository.save(booking);
     } catch (error) {
       if (
         error instanceof QueryFailedError &&
@@ -51,6 +62,15 @@ export class BookingsService {
       }
       throw error;
     }
+
+    const message = await this.aiService.generateBookingConfirmation({
+      name: savedBooking.name,
+      date: timeSlot.date,
+      time: timeSlot.time,
+      duration: timeSlot.duration,
+    });
+
+    return Object.assign(savedBooking, { message });
   }
 
   findAll(): Promise<Booking[]> {

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { AiModule } from './ai/ai.module.js';
 import { AppController } from './app.controller.js';
 import { AppService } from './app.service.js';
 import { BookingsModule } from './bookings/bookings.module.js';
@@ -34,6 +35,7 @@ import { TimeSlotsModule } from './time-slots/time-slots.module.js';
         keepAlive: true,
       }),
     }),
+    AiModule,
     TimeSlotsModule,
     BookingsModule,
   ],
