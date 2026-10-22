@@ -17,6 +17,7 @@ where its Vite dev server proxies to this API.
 | Database   | PostgreSQL (tested against Neon, works with any Postgres) |
 | Validation | `class-validator` + global `ValidationPipe`     |
 | Runtime    | Node.js 24 (see `.nvmrc`)                       |
+| AI messages | [OpenRouter](https://openrouter.ai) via `@openrouter/sdk` |
 
 ## Quick start
 
@@ -24,6 +25,7 @@ where its Vite dev server proxies to this API.
 npm ci
 
 # Create .env and set DATABASE_URL (required).
+# Set OPENROUTER_API_KEY too if you want AI-written booking confirmations.
 cp .env.example .env
 
 # Development (watch mode, listens on PORT or 3000)
@@ -49,6 +51,8 @@ loads `.env` in development).
 | `DB_RETRY_ATTEMPTS`     | no       | `10`    | TypeORM connection retry count (cold-start tolerance).             |
 | `DB_RETRY_DELAY_MS`     | no       | `3000`  | Delay between connection retries.                                  |
 | `DB_CONNECT_TIMEOUT_MS` | no       | `15000` | Per-attempt connection timeout.                                    |
+| `OPENROUTER_API_KEY` | no       | —       | OpenRouter API key. Enables AI-written booking confirmation messages; without it a static message is returned (see [AI confirmation messages](#ai-confirmation-messages)). |
+| `OPENROUTER_MODEL`   | no       | `minimax/minimax-m3.1-flash:free` | Chat model used to write confirmation messages.                     |
 
 > **Why the retry settings?** Serverless Postgres (e.g. Neon) suspends idle
 > databases, so the first connection after a cold start can be slow or fail once.
@@ -64,6 +68,41 @@ frontend hosted on a different domain), set `CORS_ORIGIN`:
 ```bash
 CORS_ORIGIN=https://my-frontend.com,http://localhost:5173
 ```
+
+## AI confirmation messages
+
+When a booking is created, the API returns a short confirmation sentence written
+by an LLM through [OpenRouter](https://openrouter.ai) (the `message` field on
+`POST /bookings` responses). Enable it by setting a key in `.env`:
+
+```bash
+OPENROUTER_API_KEY=sk-or-v1-...
+# Optional: pick a different chat model (must be a text/chat model, not an embedding model)
+OPENROUTER_MODEL=minimax/minimax-m3.1-flash:free
+```
+
+Example message:
+
+```text
+Hi Ada, your booking is confirmed for November 15, 2026 at 9:00 AM for 30 minutes.
+```
+
+The AI call is **best-effort and never blocks a booking**:
+
+- It runs after the booking row is saved, so creating a booking always succeeds
+  even if the model call fails.
+- An empty response is retried once, and each attempt gives up after 20
+  seconds.
+- If the key is missing, the model errors or times out, a static fallback
+  message is returned instead (and the reason is logged as a warning).
+
+Messages are generated only on create — they are not stored, and
+`GET /bookings` does not return them.
+
+> **Model note:** embedding models (e.g. `nvidia/nemotron-3.5-embed-1b:free`)
+> return number vectors rather than text and cannot be used here. The default is
+> a non-reasoning free chat model, because some free reasoning models spend their
+> whole token budget on reasoning and return empty content for short prompts.
 
 ## API
 
@@ -117,6 +156,11 @@ CORS_ORIGIN=https://my-frontend.com,http://localhost:5173
 | `timeSlotId`| UUID                | The slot being booked.                           |
 | `timeSlot`  | `TimeSlot`          | Present on list/get only, **not** on create.     |
 | `createdAt` | ISO 8601 timestamp  | Generated server-side.                           |
+
+The `POST /bookings` response additionally includes a `message` string (the AI
+confirmation — see [AI confirmation messages](#ai-confirmation-messages)). It is
+not part of the entity: the message is not stored and is absent from list/get
+responses.
 
 ### Endpoints
 
@@ -330,12 +374,16 @@ curl -X POST https://your-app.onrender.com/bookings \
   "name": "Ada Lovelace",
   "email": "ada@example.com",
   "timeSlotId": "40393236-a346-4f7a-8540-3d5c9de6a2a1",
-  "createdAt": "2026-10-21T17:16:32.548Z"
+  "createdAt": "2026-10-21T17:16:32.548Z",
+  "message": "Hi Ada, your booking is confirmed for November 15, 2026 at 9:00 AM for 30 minutes."
 }
 ```
 
 The response does **not** include the nested `timeSlot` (create only returns the
-booking row).
+booking row). The `message` field is written by an LLM when
+`OPENROUTER_API_KEY` is configured, and falls back to a static confirmation
+sentence otherwise — booking creation never fails because of it (see
+[AI confirmation messages](#ai-confirmation-messages)).
 
 **Errors**
 
@@ -396,7 +444,7 @@ Manual setup (without the blueprint) — the equivalent settings:
 | Start command   | `npm run start:prod`                           |
 | Health check    | `/`                                            |
 | Node version    | 24 (from `.nvmrc`)                             |
-| Env vars        | `DATABASE_URL` (required), optional `CORS_ORIGIN`, `PORT` (set by Render) |
+| Env vars        | `DATABASE_URL` (required), optional `CORS_ORIGIN`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `PORT` (set by Render) |
 
 If the frontend is served from a different origin, set `CORS_ORIGIN` on the
 service to the frontend's URL, e.g. `https://my-frontend.netlify.app`.
@@ -416,6 +464,9 @@ src/
 ├── main.ts                       # bootstrap, ValidationPipe, opt-in CORS, PORT
 ├── app.module.ts                 # ConfigModule + TypeOrmModule (Postgres)
 ├── app.controller.ts             # GET /
+├── ai/
+│   ├── ai.module.ts              # global module exporting AiService
+│   └── ai.service.ts             # OpenRouter client, retry/timeout/fallback
 ├── time-slots/
 │   ├── time-slots.controller.ts  # /time-slots routes
 │   ├── time-slots.service.ts     # queries, ordering, available filter
@@ -423,7 +474,7 @@ src/
 │   └── entities/time-slot.entity.ts
 └── bookings/
     ├── bookings.controller.ts    # /bookings routes
-    ├── bookings.service.ts       # booking + double-booking guards
+    ├── bookings.service.ts       # booking + double-booking guards, AI confirmation
     ├── dto/create-booking.dto.ts
     └── entities/booking.entity.ts
 ```
